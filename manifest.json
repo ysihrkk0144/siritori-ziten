@@ -1,0 +1,16 @@
+{
+  "name": "小学生しりとり辞典",
+  "short_name": "しりとり辞典",
+  "description": "小学生がしりとりで使える言葉を、よみがな・意味つきで五十音順に調べられる辞典。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F2F8FF",
+  "theme_color": "#FF7AC3",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
