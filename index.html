@@ -72,9 +72,36 @@
     opacity:0; transform:translateY(20px); pointer-events:none; transition:.25s}
   #toTop.show{opacity:1; transform:none; pointer-events:auto}
   @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto} .chips,#toTop,.col{transition:none}}
+
+  /* ── オフラインキャッシュ完了バナー ── */
+  #swBanner{
+    position:fixed; top:0; left:0; right:0; z-index:200;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    padding:12px 16px;
+    background:linear-gradient(90deg,#26DE81,#0fbcf9);
+    color:#fff; font-size:14px; font-weight:700;
+    box-shadow:0 4px 16px rgba(38,222,129,.45);
+    transform:translateY(-110%);
+    transition:transform .35s cubic-bezier(.34,1.4,.64,1);
+    pointer-events:none;
+  }
+  #swBanner.show{transform:translateY(0); pointer-events:auto;}
+  #swBanner button{
+    background:rgba(255,255,255,.3); border:none; border-radius:999px;
+    color:#fff; font-size:16px; line-height:1; padding:2px 8px; cursor:pointer;
+    margin-left:8px;
+  }
 </style>
 </head>
 <body>
+
+<!-- オフラインキャッシュ完了バナー（Service Workerから通知が来ると表示） -->
+<div id="swBanner" role="status" aria-live="polite" aria-atomic="true">
+  <span id="swBannerText"></span>
+  <button onclick="document.getElementById('swBanner').classList.remove('show')"
+          aria-label="閉じる">×</button>
+</div>
+
 <header>
   <h1>小学生しりとり辞典</h1>
   <p>言葉をたくさん知って、大人にドヤ顔をしよう！</p>
@@ -1206,9 +1233,43 @@ addEventListener("scroll",()=>toTop.classList.toggle("show", scrollY>400),{passi
 addEventListener("resize",setNavH);
 setNavH();
 
-/* PWA：オフライン用のService Workerを登録（file://では何もしない） */
-if("serviceWorker" in navigator && location.protocol.startsWith("http")){
-  addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
+/* ── PWA: Service Worker 登録 ── */
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+
+  /* バナー表示ユーティリティ */
+  const banner     = document.getElementById("swBanner");
+  const bannerText = document.getElementById("swBannerText");
+  let   bannerTimer;
+
+  function showBanner(msg, autoHide = true) {
+    bannerText.textContent = msg;
+    banner.classList.add("show");
+    clearTimeout(bannerTimer);
+    if (autoHide) {
+      bannerTimer = setTimeout(() => banner.classList.remove("show"), 4000);
+    }
+  }
+
+  /* Service Worker からのメッセージ受信                          */
+  /* activate 完了後に CACHE_READY が届いたらバナーを表示         */
+  navigator.serviceWorker.addEventListener("message", e => {
+    if (e.data?.type === "CACHE_READY") {
+      showBanner("✅ オフライン対応完了！機内モードでも使えます");
+    }
+  });
+
+  /* SW を登録する */
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("service-worker.js")
+      .then(reg => {
+        console.log("[App] SW 登録成功:", reg.scope);
+      })
+      .catch(err => {
+        /* 登録失敗はサイレントに処理（ユーザー体験を損なわない） */
+        console.warn("[App] SW 登録失敗:", err);
+      });
+  });
 }
 </script>
 </body>
