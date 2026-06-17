@@ -6,7 +6,7 @@
    例: "shiritori-v2" → "shiritori-v3"
    これをしないと古いキャッシュが使われ続ける。
    ============================================================ */
-const CACHE  = "shiritori-v3";          // ← ファイル変更時にここを上げる
+const CACHE  = "shiritori-v4";          // ← ファイル変更時にここを上げる
 
 const ASSETS = [
   /* service-worker.js 自身はリストに含めない */
@@ -32,27 +32,51 @@ self.addEventListener("install", e => {
       const cache = await caches.open(CACHE);
 
       const results = await Promise.allSettled(
-        ASSETS.map(url =>
-          fetch(url, { cache: "reload" })
+        ASSETS.map(url => {
+          /* {cache:"reload"} は一部のAndroid環境（古いWebView系Chrome等）で
+             Service Worker内から使うと不安定になることがある。
+             代わりにURLへバージョン付きのクエリを足して
+             ブラウザ・CDNの古いキャッシュを確実に回避する。      */
+          const bust = url.includes("?") ? "&" : "?";
+          const fetchUrl = url + bust + "swv=" + encodeURIComponent(CACHE);
+
+          return fetch(fetchUrl)
             .then(res => {
-              if (!res.ok) throw new Error(`HTTP ${res.status} – ${url}`);
-              /* キーは ASSETS に書いた相対パスの文字列そのものに固定する。
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              /* 保存先のキーは元の相対パス（クエリ無し）に固定する。
                  後で caches.match("./index.html") のように
                  「固定キーでの問い合わせ」と必ず一致させるため。 */
               return cache.put(url, res);
-            })
-        )
+            });
+        })
       );
 
-      const failed = results
-        .filter(r => r.status === "rejected")
-        .map(r => r.reason?.message ?? String(r.reason));
+      const succeeded = [];
+      const failed     = [];
+      results.forEach((r, i) => {
+        const url = ASSETS[i];
+        if (r.status === "fulfilled") {
+          succeeded.push(url);
+        } else {
+          failed.push({ url, message: r.reason?.message ?? String(r.reason) });
+        }
+      });
 
       if (failed.length) {
-        console.warn("[SW] 一部キャッシュ失敗（他は保存済み）:", failed);
+        console.warn("[SW] 一部キャッシュ失敗:", failed);
       } else {
         console.log("[SW] 全ファイルのキャッシュ完了:", CACHE);
       }
+
+      /* コンソールが見られない（PC無し）環境のため、
+         成功/失敗の詳細を画面（バナー）にも必ず通知する。 */
+      const clients = await self.clients.matchAll({ type: "window" });
+      clients.forEach(c => c.postMessage({
+        type: "CACHE_INSTALL_RESULT",
+        version: CACHE,
+        succeeded,
+        failed
+      }));
 
       await self.skipWaiting();
     })()

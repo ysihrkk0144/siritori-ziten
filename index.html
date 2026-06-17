@@ -86,6 +86,8 @@
     pointer-events:none;
   }
   #swBanner.show{transform:translateY(0); pointer-events:auto;}
+  #swBanner.fail{background:linear-gradient(90deg,#FF5E5E,#FF9248);
+    box-shadow:0 4px 16px rgba(255,94,94,.45)}
   #swBanner button{
     background:rgba(255,255,255,.3); border:none; border-radius:999px;
     color:#fff; font-size:16px; line-height:1; padding:2px 8px; cursor:pointer;
@@ -1316,8 +1318,10 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   const bannerText = document.getElementById("swBannerText");
   let   bannerTimer;
 
-  function showBanner(msg, autoHide = true) {
+  function showBanner(msg, opts = {}) {
+    const { autoHide = true, fail = false } = opts;
     bannerText.textContent = msg;
+    banner.classList.toggle("fail", fail);
     banner.classList.add("show");
     clearTimeout(bannerTimer);
     if (autoHide) {
@@ -1327,11 +1331,35 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 
   /* Service Worker からのメッセージ受信 */
   navigator.serviceWorker.addEventListener("message", e => {
+
     if (e.data?.type === "CACHE_READY") {
       showBanner("✅ オフライン対応完了！機内モードでも使えます");
     }
+
     if (e.data?.type === "DIAG_RESPONSE") {
       renderDiag(e.data);
+    }
+
+    /* インストール直後の詳細結果。
+       index.html自体が失敗していた場合は特に強調して表示し、
+       自動で消えないようにする（見落とし防止）。            */
+    if (e.data?.type === "CACHE_INSTALL_RESULT") {
+      const { succeeded, failed } = e.data;
+      console.log("[App] キャッシュ結果:", succeeded, failed);
+
+      if (failed.length === 0) {
+        showBanner(`✅ ${succeeded.length}件のファイルを保存しました`,
+                    { autoHide: true, fail: false });
+      } else {
+        const indexFailed = failed.some(f => f.url === "./index.html");
+        const names = failed.map(f => f.url.replace("./", "")).join("、");
+        showBanner(
+          indexFailed
+            ? `⚠️ 重要：index.htmlの保存に失敗（${failed[0].message}）`
+            : `⚠️ 一部失敗：${names}（オフライン時に影響あり）`,
+          { autoHide: false, fail: true }
+        );
+      }
     }
   });
 
@@ -1344,7 +1372,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       })
       .catch(err => {
         console.warn("[App] SW 登録失敗:", err);
-        showBanner("⚠️ オフライン対応の登録に失敗しました", true);
+        showBanner("⚠️ オフライン対応の登録に失敗しました", { autoHide: false, fail: true });
       });
   });
 } else {
