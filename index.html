@@ -8,7 +8,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="しりとり辞典">
+<meta name="apple-mobile-web-app-title" content="こどもしりとり辞典">
 <style>
   :root{
     --bg:#F2F8FF; --card:#FFFFFF; --ink:#2B2B40; --sub:#7A7A92;
@@ -73,61 +73,117 @@
   #toTop.show{opacity:1; transform:none; pointer-events:auto}
   @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto} .chips,#toTop,.col{transition:none}}
 
-  /* ── オフラインキャッシュ完了バナー ── */
-  #swBanner{
+  /* ── インストール結果バナー（画面上部） ── */
+  #installBanner{
     position:fixed; top:0; left:0; right:0; z-index:200;
     display:flex; align-items:center; justify-content:center; gap:8px;
     padding:12px 16px;
     background:linear-gradient(90deg,#26DE81,#0fbcf9);
-    color:#fff; font-size:14px; font-weight:700;
+    color:#fff; font-size:14px; font-weight:700; text-align:center;
     box-shadow:0 4px 16px rgba(38,222,129,.45);
     transform:translateY(-110%);
     transition:transform .35s cubic-bezier(.34,1.4,.64,1);
     pointer-events:none;
   }
-  #swBanner.show{transform:translateY(0); pointer-events:auto;}
-  #swBanner.fail{background:linear-gradient(90deg,#FF5E5E,#FF9248);
-    box-shadow:0 4px 16px rgba(255,94,94,.45)}
-  #swBanner button{
+  #installBanner.show{transform:translateY(0); pointer-events:auto;}
+  #installBanner.warn{background:linear-gradient(90deg,#FF9248,#FFC233);
+    box-shadow:0 4px 16px rgba(255,146,72,.45)}
+  #installBanner button{
     background:rgba(255,255,255,.3); border:none; border-radius:999px;
     color:#fff; font-size:16px; line-height:1; padding:2px 8px; cursor:pointer;
-    margin-left:8px;
+    margin-left:8px; flex-shrink:0;
   }
 
-  /* ── 診断パネル（PCが無くても画面上でキャッシュ状況を確認できる） ── */
-  #diagToggle{
-    position:fixed; left:14px; bottom:18px; z-index:60;
-    border:none; border-radius:999px; padding:9px 14px; font-size:12px; font-weight:700;
-    color:#5A4A8A; background:#fff; box-shadow:var(--shadow); cursor:pointer;
-    opacity:.85;
-  }
-  #diagPanel{
-    position:fixed; left:10px; right:10px; bottom:64px; z-index:70;
-    max-height:60vh; overflow:auto;
-    background:#1B1530; color:#E9E4FF; border-radius:14px;
-    padding:14px 16px; font-size:12px; line-height:1.7;
-    font-family:ui-monospace,Menlo,Consolas,monospace;
+  /* ── 更新確認バナー（画面下部） ── */
+  #updateBanner{
+    position:fixed; left:10px; right:10px; bottom:18px; z-index:150;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    flex-wrap:wrap;
+    background:#2B2B40; color:#fff; border-radius:16px;
+    padding:14px 16px; font-size:14px; font-weight:700;
     box-shadow:0 10px 30px rgba(0,0,0,.35);
-    display:none; white-space:pre-wrap; word-break:break-all;
+    transform:translateY(140%); transition:transform .3s cubic-bezier(.34,1.4,.64,1);
   }
-  #diagPanel.show{display:block}
-  #diagPanel .ok{color:#7CFFB2}
-  #diagPanel .ng{color:#FF8FA3}
-  #diagPanel .ttl{color:#FFD24D; font-weight:700}
+  #updateBanner.show{transform:translateY(0)}
+  #updateBanner .ub-row{display:flex; gap:8px; flex-shrink:0; margin-left:auto}
+  #updateBanner button{
+    border:none; border-radius:999px; padding:8px 14px; font-size:13px; font-weight:800;
+    cursor:pointer;
+  }
+  #updateBanner .ub-go{background:linear-gradient(135deg,var(--g1),var(--g2)); color:#fff}
+  #updateBanner .ub-later{background:rgba(255,255,255,.15); color:#fff}
+
+  /* ── 診断パネル（PCが無くても画面で状態を確認できる） ── */
+  #diagToggle{
+    position:fixed; right:16px; bottom:80px; z-index:60;
+    border:none; border-radius:999px; width:46px; height:46px; font-size:19px;
+    color:#fff; background:#5A4A8A; box-shadow:var(--shadow); cursor:pointer;
+  }
+  #diagOverlay{
+    position:fixed; inset:0; z-index:300; background:#16112B; color:#E9E4FF;
+    display:none; flex-direction:column;
+  }
+  #diagOverlay.show{display:flex}
+  #diagHead{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px; border-bottom:1px solid rgba(255,255,255,.12);
+    font-size:16px; font-weight:800;
+  }
+  #diagHead button{
+    border:none; background:rgba(255,255,255,.12); color:#fff;
+    border-radius:999px; width:34px; height:34px; font-size:16px; cursor:pointer;
+  }
+  #diagBody{
+    flex:1; overflow:auto; padding:14px 16px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;
+    font-size:12.5px; line-height:1.8; white-space:pre-wrap; word-break:break-all;
+  }
+  #diagBody .ttl{color:#FFD24D; font-weight:700}
+  #diagBody .ok{color:#7CFFB2}
+  #diagBody .ng{color:#FF8FA3; font-weight:700}
+  #diagFoot{
+    display:flex; gap:10px; padding:14px 16px;
+    border-top:1px solid rgba(255,255,255,.12);
+  }
+  #diagFoot button{
+    flex:1; border:none; border-radius:12px; padding:12px 8px;
+    font-size:13px; font-weight:800; cursor:pointer; color:#fff;
+  }
+  #diagRefresh{background:#4D96FF}
+  #diagCheckUpdate{background:linear-gradient(135deg,var(--g1),var(--g2))}
 </style>
 </head>
 <body>
 
-<!-- オフラインキャッシュ完了バナー（Service Workerから通知が来ると表示） -->
-<div id="swBanner" role="status" aria-live="polite" aria-atomic="true">
-  <span id="swBannerText"></span>
-  <button onclick="document.getElementById('swBanner').classList.remove('show')"
+<!-- インストール結果バナー（画面上部・Service Workerから通知が来ると表示） -->
+<div id="installBanner" role="status" aria-live="polite" aria-atomic="true">
+  <span id="installBannerText"></span>
+  <button onclick="document.getElementById('installBanner').classList.remove('show')"
           aria-label="閉じる">×</button>
 </div>
 
-<!-- 診断パネル：PCが無い環境でもキャッシュ状況を画面で確認するための機能 -->
-<div id="diagPanel" aria-live="polite"></div>
-<button id="diagToggle" type="button" aria-label="オフライン対応の診断">🔍 診断</button>
+<!-- 更新確認バナー（画面下部・「最新版を確認」または自動検知で表示） -->
+<div id="updateBanner" role="status" aria-live="polite">
+  <span id="updateBannerText">🆕 新しいバージョンがあります</span>
+  <div class="ub-row">
+    <button class="ub-go" id="updateGoBtn">更新する</button>
+    <button class="ub-later" id="updateLaterBtn">あとで</button>
+  </div>
+</div>
+
+<!-- 診断パネル：PCが無い環境でもSWの状態を画面で確認するための機能 -->
+<button id="diagToggle" type="button" aria-label="診断パネルを開く">🔧</button>
+<div id="diagOverlay">
+  <div id="diagHead">
+    <span>🔧 オフライン診断</span>
+    <button id="diagClose" aria-label="閉じる">×</button>
+  </div>
+  <div id="diagBody">読み込み中…</div>
+  <div id="diagFoot">
+    <button id="diagRefresh">🔄 再取得</button>
+    <button id="diagCheckUpdate">🌐 最新版を確認</button>
+  </div>
+</div>
 
 <header>
   <h1>小学生しりとり辞典</h1>
@@ -1259,125 +1315,237 @@ toTop.onclick=()=>window.scrollTo({top:0,behavior:"smooth"});
 addEventListener("scroll",()=>toTop.classList.toggle("show", scrollY>400),{passive:true});
 addEventListener("resize",setNavH);
 setNavH();
+/* ============================================================
+   PWA: Service Worker 登録・手動更新・診断パネル
+   ============================================================
+   方針：
+   ・ページ読み込み時の自動更新チェックは一切行わない。
+   ・更新は「最新版を確認」ボタンを押した時だけ。
+   ・controller・キャッシュ件数などは診断パネルで
+     いつでも画面上から確認できる（DevTools不要）。
+   ============================================================ */
 
-/* ── 診断パネル（PCが無くても画面でキャッシュ状況を確認できる） ── */
-const diagPanel  = document.getElementById("diagPanel");
-const diagToggle = document.getElementById("diagToggle");
+const SW_SUPPORTED = "serviceWorker" in navigator;
+
+/* ── インストール結果バナー（上部） ── */
+const installBanner     = document.getElementById("installBanner");
+const installBannerText = document.getElementById("installBannerText");
+let   installBannerTimer;
+
+function showInstallBanner(msg, { autoHide = true, warn = false } = {}) {
+  installBannerText.textContent = msg;
+  installBanner.classList.toggle("warn", warn);
+  installBanner.classList.add("show");
+  clearTimeout(installBannerTimer);
+  if (autoHide) {
+    installBannerTimer = setTimeout(() => installBanner.classList.remove("show"), 4000);
+  }
+}
+
+/* ── 更新確認バナー（下部） ── */
+const updateBanner     = document.getElementById("updateBanner");
+const updateBannerText = document.getElementById("updateBannerText");
+const updateGoBtn      = document.getElementById("updateGoBtn");
+const updateLaterBtn   = document.getElementById("updateLaterBtn");
+let   waitingWorker    = null;   // 更新が見つかった新SW（waiting状態）
+
+function showUpdateBanner(){ updateBanner.classList.add("show"); }
+function hideUpdateBanner(){ updateBanner.classList.remove("show"); }
+
+updateLaterBtn.addEventListener("click", hideUpdateBanner);
+
+updateGoBtn.addEventListener("click", () => {
+  if (!waitingWorker) return;
+  /* 「更新する」を押した時だけ、新SWへ skipWaiting を指示する。
+     これ以外のタイミングでは絶対に送らない。               */
+  waitingWorker.postMessage({ type: "SKIP_WAITING" });
+});
+
+/* 新SWが実際に有効化されたら（controllerchange）リロードする。
+   これも「更新する」を押した結果としてのみ発生する。       */
+let reloading = false;
+if (SW_SUPPORTED) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
+}
+
+/* ── 診断パネル ── */
+const diagToggle     = document.getElementById("diagToggle");
+const diagOverlay    = document.getElementById("diagOverlay");
+const diagClose      = document.getElementById("diagClose");
+const diagBody       = document.getElementById("diagBody");
+const diagRefresh    = document.getElementById("diagRefresh");
+const diagCheckBtn   = document.getElementById("diagCheckUpdate");
 
 function escHtml(s){
   return String(s).replace(/[&<>"']/g, c =>
     ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 }
 
-function renderDiag(info){
-  if(!info){
-    diagPanel.innerHTML =
-      `<span class="ttl">診断結果</span>\n` +
-      `Service Worker: ${("serviceWorker" in navigator) ? "対応" : "未対応"}\n` +
-      `controller: ${navigator.serviceWorker?.controller ? "あり（SW制御下）" : "なし（未制御）"}\n` +
-      `通信状態: ${navigator.onLine ? "オンライン" : "オフライン（機内モード等）"}\n\n` +
-      `※ controller が「なし」の場合、SWはまだこのページを\n` +
-      `　制御していません。一度オンラインで再読み込みしてください。`;
+let lastDiagInfo = null;   // SWから来た最新のキャッシュ診断結果
+
+/* 画面に表示する診断テキストを組み立てる。
+   SWの状態（active/waiting/installing）・controllerの有無・
+   キャッシュ件数を、すべてここで一度に確認できるようにする。 */
+async function renderDiag() {
+  if (!SW_SUPPORTED) {
+    diagBody.innerHTML = `<span class="ng">このブラウザはService Workerに対応していません</span>`;
     return;
   }
+
+  const reg = await navigator.serviceWorker.getRegistration("./").catch(() => null);
   const lines = [];
-  lines.push(`<span class="ttl">キャッシュ診断（${escHtml(info.cacheName)}）</span>`);
-  lines.push(`キャッシュ済み: ${info.cachedCount} / ${info.expectedCount} 件`);
+
+  lines.push(`<span class="ttl">■ 基本情報</span>`);
+  lines.push(`現在のURL: ${escHtml(location.href)}`);
+  lines.push(`SW対応: <span class="ok">対応</span>`);
   lines.push("");
-  if(info.missing.length){
-    lines.push(`<span class="ng">✕ 未キャッシュ:</span>`);
-    info.missing.forEach(m => lines.push(`  ${escHtml(m)}`));
+
+  lines.push(`<span class="ttl">■ 登録状態</span>`);
+  if (!reg) {
+    lines.push(`<span class="ng">未登録（reg が取得できません）</span>`);
   } else {
-    lines.push(`<span class="ok">✓ 全ファイルキャッシュ済み</span>`);
+    lines.push(`scope: ${escHtml(reg.scope)}`);
+    lines.push(`active: ${reg.active ? "あり" : "なし"}`);
+    lines.push(`waiting: ${reg.waiting ? "<span class=\"ng\">あり（更新待ち）</span>" : "なし"}`);
+    lines.push(`installing: ${reg.installing ? "あり（インストール中）" : "なし"}`);
   }
+  const hasController = !!navigator.serviceWorker.controller;
+  lines.push(`controller: ${hasController
+      ? '<span class="ok">あり（このページはSW制御下）</span>'
+      : '<span class="ng">なし（まだSWに制御されていません）</span>'}`);
   lines.push("");
-  lines.push(`<span class="ttl">保存済みURL一覧</span>`);
-  info.cachedUrls.forEach(u => lines.push(`  ${escHtml(u)}`));
-  diagPanel.innerHTML = lines.join("\n");
+
+  lines.push(`<span class="ttl">■ キャッシュ診断</span>`);
+  if (!lastDiagInfo) {
+    lines.push("（まだ取得していません。「🔄 再取得」を押してください）");
+  } else {
+    const info = lastDiagInfo;
+    lines.push(`cacheName: ${escHtml(info.cacheName)}`);
+    lines.push(`キャッシュ済み: ${info.cachedCount} / ${info.expectedCount} 件`);
+    lines.push(
+      info.missing.length === 0
+        ? `<span class="ok">✓ 全ファイルキャッシュ済み</span>`
+        : `<span class="ng">✕ 未キャッシュ: ${info.missing.map(escHtml).join(", ")}</span>`
+    );
+    lines.push("");
+    lines.push(`<span class="ttl">■ 保存済みURL一覧</span>`);
+    info.cachedUrls.forEach(u => lines.push(`  ${escHtml(u)}`));
+  }
+
+  diagBody.innerHTML = lines.join("\n");
 }
 
+/* 診断パネルを開く／閉じる */
 diagToggle.addEventListener("click", () => {
-  const opening = !diagPanel.classList.contains("show");
-  diagPanel.classList.toggle("show");
-  if(!opening) return;
+  diagOverlay.classList.add("show");
+  requestDiagFromSW();
+  renderDiag();
+});
+diagClose.addEventListener("click", () => diagOverlay.classList.remove("show"));
 
-  if(!("serviceWorker" in navigator) || !navigator.serviceWorker.controller){
-    renderDiag(null);
-    return;
+/* SWへキャッシュ診断を問い合わせる（controllerが居る時だけ送れる） */
+function requestDiagFromSW() {
+  if (SW_SUPPORTED && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: "GET_DIAGNOSTIC" });
   }
-  /* SWへ診断リクエストを送り、結果が来るまで簡易表示 */
-  diagPanel.textContent = "問い合わせ中…";
-  navigator.serviceWorker.controller.postMessage({ type: "DIAG_REQUEST" });
+}
+
+diagRefresh.addEventListener("click", () => {
+  diagBody.innerHTML = "問い合わせ中…";
+  requestDiagFromSW();
+  renderDiag();
 });
 
-/* ── PWA: Service Worker 登録 ── */
-if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-
-  /* バナー表示ユーティリティ */
-  const banner     = document.getElementById("swBanner");
-  const bannerText = document.getElementById("swBannerText");
-  let   bannerTimer;
-
-  function showBanner(msg, opts = {}) {
-    const { autoHide = true, fail = false } = opts;
-    bannerText.textContent = msg;
-    banner.classList.toggle("fail", fail);
-    banner.classList.add("show");
-    clearTimeout(bannerTimer);
-    if (autoHide) {
-      bannerTimer = setTimeout(() => banner.classList.remove("show"), 4000);
-    }
+/* 「🌐 最新版を確認」：ここが唯一、明示的にネットワーク更新チェックを
+   発生させる場所。ページ読み込み時には絶対に呼ばない。         */
+diagCheckBtn.addEventListener("click", async () => {
+  if (!SW_SUPPORTED) return;
+  const reg = await navigator.serviceWorker.getRegistration("./").catch(() => null);
+  if (!reg) {
+    showInstallBanner("⚠️ SWが登録されていません", { warn: true, autoHide: false });
+    return;
   }
+  diagCheckBtn.textContent = "確認中…";
+  try {
+    await reg.update();
+    showInstallBanner("✅ 最新版を確認しました", { autoHide: true });
+  } catch (err) {
+    showInstallBanner("⚠️ 更新確認に失敗しました（オフラインの可能性）", { warn: true, autoHide: true });
+  } finally {
+    diagCheckBtn.textContent = "🌐 最新版を確認";
+    renderDiag();
+  }
+});
 
-  /* Service Worker からのメッセージ受信 */
+/* ── Service Worker 登録・メッセージ処理 ── */
+if (SW_SUPPORTED && location.protocol.startsWith("http")) {
+
   navigator.serviceWorker.addEventListener("message", e => {
+    const data = e.data || {};
 
-    if (e.data?.type === "CACHE_READY") {
-      showBanner("✅ オフライン対応完了！機内モードでも使えます");
-    }
-
-    if (e.data?.type === "DIAG_RESPONSE") {
-      renderDiag(e.data);
-    }
-
-    /* インストール直後の詳細結果。
-       index.html自体が失敗していた場合は特に強調して表示し、
-       自動で消えないようにする（見落とし防止）。            */
-    if (e.data?.type === "CACHE_INSTALL_RESULT") {
-      const { succeeded, failed } = e.data;
-      console.log("[App] キャッシュ結果:", succeeded, failed);
-
-      if (failed.length === 0) {
-        showBanner(`✅ ${succeeded.length}件のファイルを保存しました`,
-                    { autoHide: true, fail: false });
+    if (data.type === "INSTALL_RESULT") {
+      if (data.failed.length === 0) {
+        showInstallBanner(`✅ オフライン準備完了！ (${data.succeededCount}/${data.totalCount}件)`);
       } else {
-        const indexFailed = failed.some(f => f.url === "./index.html");
-        const names = failed.map(f => f.url.replace("./", "")).join("、");
-        showBanner(
-          indexFailed
-            ? `⚠️ 重要：index.htmlの保存に失敗（${failed[0].message}）`
-            : `⚠️ 一部失敗：${names}（オフライン時に影響あり）`,
-          { autoHide: false, fail: true }
+        showInstallBanner(
+          `⚠️ 一部未保存 (${data.succeededCount}/${data.totalCount}件、失敗${data.failed.length}件)`,
+          { warn: true, autoHide: false }
         );
       }
+      renderDiag();
+    }
+
+    if (data.type === "ACTIVATED") {
+      renderDiag();
+    }
+
+    if (data.type === "DIAGNOSTIC_RESULT") {
+      lastDiagInfo = data;
+      renderDiag();
     }
   });
 
-  /* SW を登録する */
   window.addEventListener("load", () => {
     navigator.serviceWorker
-      .register("service-worker.js")
+      .register("./service-worker.js", { scope: "./", updateViaCache: "none" })
       .then(reg => {
-        console.log("[App] SW 登録成功:", reg.scope);
+        /* ページ読み込み時に reg.update() は呼ばない（自動更新チェック禁止）。 */
+
+        /* すでに新SWが waiting 状態であれば、更新バナーをすぐ出す。 */
+        if (reg.waiting) {
+          waitingWorker = reg.waiting;
+          showUpdateBanner();
+        }
+
+        /* 新しいSWが見つかった（installingが始まった）時の検知。
+           ※これは「最新版を確認」ボタン押下時の reg.update() に
+           　反応して発火するものであり、自動チェックではない。 */
+        reg.addEventListener("updatefound", () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener("statechange", () => {
+            if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+              waitingWorker = newWorker;
+              showUpdateBanner();
+            }
+          });
+        });
+
+        renderDiag();
       })
       .catch(err => {
         console.warn("[App] SW 登録失敗:", err);
-        showBanner("⚠️ オフライン対応の登録に失敗しました", { autoHide: false, fail: true });
+        showInstallBanner("⚠️ オフライン対応の登録に失敗しました", { warn: true, autoHide: false });
       });
   });
 } else {
-  /* http以外（file://等）では診断ボタンを押すとその旨を表示 */
-  diagToggle.addEventListener("click", () => {}, { once: false });
+  diagToggle.addEventListener("click", () => {
+    diagBody.innerHTML = `<span class="ng">http(s)以外、またはSW非対応のため利用できません</span>`;
+  });
 }
 </script>
 </body>

@@ -1,110 +1,114 @@
 /* ============================================================
-   service-worker.js   –   小学生しりとり辞典
+   service-worker.js   –   こどもしりとり辞典
    ============================================================
-   【バージョン管理ルール】
-   ASSETS を追加・変更・削除するたびに CACHE の番号を必ず上げる。
-   例: "shiritori-v2" → "shiritori-v3"
-   これをしないと古いキャッシュが使われ続ける。
+   【設計方針】
+   ・このSWは「完全オフライン優先」で動く。
+   ・新バージョンへの切り替えは、ユーザーが画面の
+     「更新する」ボタンを押した時だけ行う。
+   ・install時に skipWaiting() は呼ばない。
+     自動更新と機内モード起動のタイミングが衝突して
+     ERR_FAILED の原因になることが分かっているため。
+   ・バージョンを上げる時は CACHE_NAME の数字を必ず増やすこと。
    ============================================================ */
-const CACHE  = "shiritori-v4";          // ← ファイル変更時にここを上げる
+const CACHE_NAME = "kodomo-shiritori-v1";   // ← ファイル変更時に必ず上げる
 
-const ASSETS = [
-  /* service-worker.js 自身はリストに含めない */
+/* キャッシュ対象（service-worker.js 自身は含めない） */
+const ASSET_PATHS = [
   "./index.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
-  /* 他のファイルを追加したらここに書き、CACHE 番号も上げる */
 ];
 
-/* キャッシュ照合時に共通で使うオプション。
-   ignoreVary: true … GitHub Pages（Fastly配信）が付与する
-                       Vary ヘッダーの違いで不一致になるのを防ぐ。
-                       これが無いと「キャッシュしたのに見つからない」
-                       という不一致が起こりうる。
-   ignoreSearch: true … URLの ?query 差異を無視する。               */
-const MATCH_OPTS = { ignoreVary: true, ignoreSearch: true };
+/* 相対パスを self.location 基準の完全URLに変換しておく。
+   これにより、キャッシュキーの不一致（相対/絶対のブレ）を防ぐ。 */
+const ASSETS    = ASSET_PATHS.map(p => new URL(p, self.location).href);
+const INDEX_URL = new URL("./index.html", self.location).href;
 
-/* ── インストール：個別キャッシュ（1ファイル失敗でも続行） ── */
+/* ── リトライ付きフェッチ ──
+   モバイル回線の不安定さに対応するため、最大3回まで試す。
+   {cache:"reload"} は使わない（一部Android環境で不安定になるため）。
+   代わりに {cache:"no-store"} でブラウザキャッシュを完全に回避する。 */
+async function fetchWithRetry(url, maxRetries = 3) {
+  let lastErr;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (i < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 300 * (i + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/* ── install：個別キャッシュ（1件失敗しても他は継続） ── */
 self.addEventListener("install", e => {
   e.waitUntil(
     (async () => {
-      const cache = await caches.open(CACHE);
+      const cache = await caches.open(CACHE_NAME);
 
       const results = await Promise.allSettled(
-        ASSETS.map(url => {
-          /* {cache:"reload"} は一部のAndroid環境（古いWebView系Chrome等）で
-             Service Worker内から使うと不安定になることがある。
-             代わりにURLへバージョン付きのクエリを足して
-             ブラウザ・CDNの古いキャッシュを確実に回避する。      */
-          const bust = url.includes("?") ? "&" : "?";
-          const fetchUrl = url + bust + "swv=" + encodeURIComponent(CACHE);
-
-          return fetch(fetchUrl)
-            .then(res => {
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              /* 保存先のキーは元の相対パス（クエリ無し）に固定する。
-                 後で caches.match("./index.html") のように
-                 「固定キーでの問い合わせ」と必ず一致させるため。 */
-              return cache.put(url, res);
-            });
+        ASSETS.map(async absUrl => {
+          const res = await fetchWithRetry(absUrl, 3);
+          await cache.put(absUrl, res);
         })
       );
 
       const succeeded = [];
       const failed     = [];
       results.forEach((r, i) => {
-        const url = ASSETS[i];
         if (r.status === "fulfilled") {
-          succeeded.push(url);
+          succeeded.push(ASSETS[i]);
         } else {
-          failed.push({ url, message: r.reason?.message ?? String(r.reason) });
+          failed.push({ url: ASSETS[i], message: r.reason?.message ?? String(r.reason) });
         }
       });
 
-      if (failed.length) {
-        console.warn("[SW] 一部キャッシュ失敗:", failed);
-      } else {
-        console.log("[SW] 全ファイルのキャッシュ完了:", CACHE);
-      }
-
-      /* コンソールが見られない（PC無し）環境のため、
-         成功/失敗の詳細を画面（バナー）にも必ず通知する。 */
+      /* 結果を画面（診断パネル・バナー）へ通知する。
+         DevToolsが使えない環境のため、console.logだけでは不十分。 */
       const clients = await self.clients.matchAll({ type: "window" });
       clients.forEach(c => c.postMessage({
-        type: "CACHE_INSTALL_RESULT",
-        version: CACHE,
+        type: "INSTALL_RESULT",
+        cacheName: CACHE_NAME,
+        succeededCount: succeeded.length,
+        totalCount: ASSETS.length,
         succeeded,
         failed
       }));
 
-      await self.skipWaiting();
+      /* ★ ここで skipWaiting() は呼ばない。
+         ユーザーが「更新する」を押した時だけ、
+         message イベント経由で呼び出す（下記参照）。      */
     })()
   );
 });
 
-/* ── アクティベート：旧キャッシュ削除 → クライアントを制御 ── */
+/* ── activate：旧キャッシュ削除 → クライアントを制御 ── */
 self.addEventListener("activate", e => {
   e.waitUntil(
     (async () => {
       const keys = await caches.keys();
       await Promise.all(
-        keys.filter(k => k !== CACHE).map(k => caches.delete(k))
+        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
       );
 
       await self.clients.claim();
 
       const clients = await self.clients.matchAll({ type: "window" });
-      clients.forEach(c =>
-        c.postMessage({ type: "CACHE_READY", version: CACHE })
-      );
-
-      console.log("[SW] アクティベート完了:", CACHE);
+      clients.forEach(c => c.postMessage({
+        type: "ACTIVATED",
+        cacheName: CACHE_NAME
+      }));
     })()
   );
 });
 
-/* 「redirectされた」フラグの付いたResponseは、Chromeの仕様で
+/* 「redirectされた」フラグ付きResponseは、Chromeの仕様で
    ナビゲーションリクエストへそのまま返すとエラーになることがある。
    bodyだけ取り出して新しいResponseに包み直して回避する。      */
 async function stripRedirectFlag(response) {
@@ -117,37 +121,37 @@ async function stripRedirectFlag(response) {
   });
 }
 
-/* ── フェッチ ── */
+/* ── fetch：オフライン優先（Cache First） ── */
 self.addEventListener("fetch", e => {
-  /* GET 以外（POST等）はそのままネットへ通す */
-  if (e.request.method !== "GET") return;
+  const req = e.request;
 
-  /* ページそのものの読み込み（ナビゲーション）は特別扱いする。
-     event.request をそのままキャッシュキーにせず、
-     必ず "./index.html" という固定キーで問い合わせることで、
-     URLの微妙な差異やVaryヘッダーの不一致による
-     「キャッシュ済みなのに見つからない」事故を避ける。   */
-  if (e.request.mode === "navigate") {
+  /* GET以外（POST等）はスルー */
+  if (req.method !== "GET") return;
+  /* http(s)以外（chrome-extension: 等）はスルー */
+  if (!req.url.startsWith("http")) return;
+
+  /* ページそのものの読み込み（ナビゲーション）は
+     必ず index.html のキャッシュを最優先で返す。
+     manifestのstart_url/scopeが "./" のため、
+     "./" へのナビゲーションも同じ index.html を返す。   */
+  if (req.mode === "navigate") {
     e.respondWith(
       (async () => {
-        try {
-          const cached = await caches.match("./index.html", MATCH_OPTS);
-          if (cached) return await stripRedirectFlag(cached);
+        const cached = await caches.match(INDEX_URL);
+        if (cached) return await stripRedirectFlag(cached);
 
-          /* キャッシュに無ければネットを試す */
-          return await fetch(e.request);
+        /* キャッシュに無い場合のみネットワークへフォールバック */
+        try {
+          return await fetch(req);
         } catch (err) {
-          /* ネットも無い・キャッシュにも無い → ここで初めて
-             「絶対に reject させない」最終防衛ラインを敷く。
-             これにより ERR_FAILED を出さず、最低限の案内文を表示する。 */
           console.warn("[SW] ナビゲーション失敗・フォールバック表示:", err);
           return new Response(
             `<!DOCTYPE html><html lang="ja"><meta charset="UTF-8">
              <body style="font-family:sans-serif;text-align:center;padding:40px 20px;">
                <h2>オフラインで開けませんでした</h2>
                <p>一度オンラインの状態でこのアプリを開き、
-               画面上部に緑色の「オフライン対応完了」バナーが
-               出ることを確認してから、もう一度お試しください。</p>
+               画面右下の「🔧」診断パネルで「キャッシュ済み件数」が
+               期待件数と一致することを確認してください。</p>
              </body></html>`,
             { status: 200, headers: { "Content-Type": "text/html; charset=UTF-8" } }
           );
@@ -157,46 +161,53 @@ self.addEventListener("fetch", e => {
     return;
   }
 
-  /* ナビゲーション以外（CSS・JS・画像・JSON等の付随リソース） */
+  /* その他のリソース（CSS・JS・画像・JSON等）：
+     キャッシュにあれば即返す。無ければネットワークを試すが、
+     失敗しても自動で何度も取りに行ったりはしない。
+     respondWithのPromiseは必ず解決させ、ERR_FAILEDを起こさない。 */
   e.respondWith(
     (async () => {
+      const cached = await caches.match(req);
+      if (cached) return await stripRedirectFlag(cached);
+
       try {
-        const cached = await caches.match(e.request, MATCH_OPTS);
-        if (cached) return await stripRedirectFlag(cached);
-        return await fetch(e.request);
+        return await fetch(req);
       } catch (err) {
-        /* ここでも reject させない。何も返せない場合は
-           「失敗した」とわかる軽量なResponseを返す。       */
-        console.warn("[SW] リソース取得失敗:", e.request.url, err);
-        return new Response("", { status: 504, statusText: "Offline" });
+        console.warn("[SW] キャッシュ無し・ネットワークも失敗:", req.url, err);
+        return new Response("", { status: 504, statusText: "Offline (no cache)" });
       }
     })()
   );
 });
 
-/* ── 診断用メッセージ ──
-   PCが無い開発環境でも、ページ側から問い合わせて
-   「何がキャッシュされているか」を画面上で確認できるようにする。 */
+/* ── message：診断要求・手動更新の指示 ── */
 self.addEventListener("message", e => {
-  if (e.data?.type !== "DIAG_REQUEST") return;
-  e.waitUntil(
-    (async () => {
-      const cache      = await caches.open(CACHE);
-      const reqs       = await cache.keys();
-      const cachedUrls = reqs.map(r => r.url);
-      const missing    = ASSETS.filter(a => {
-        const abs = new URL(a, self.location.href).href;
-        return !cachedUrls.includes(abs);
-      });
-      const info = {
-        type: "DIAG_RESPONSE",
-        cacheName: CACHE,
-        cachedCount: cachedUrls.length,
-        expectedCount: ASSETS.length,
-        cachedUrls,
-        missing
-      };
-      if (e.source) e.source.postMessage(info);
-    })()
-  );
+  const data = e.data || {};
+
+  if (data.type === "GET_DIAGNOSTIC") {
+    e.waitUntil(
+      (async () => {
+        const cache      = await caches.open(CACHE_NAME);
+        const reqs       = await cache.keys();
+        const cachedUrls = reqs.map(r => r.url);
+        const missing    = ASSETS.filter(a => !cachedUrls.includes(a));
+        const info = {
+          type: "DIAGNOSTIC_RESULT",
+          cacheName: CACHE_NAME,
+          cachedCount: cachedUrls.length,
+          expectedCount: ASSETS.length,
+          cachedUrls,
+          missing
+        };
+        if (e.source) e.source.postMessage(info);
+      })()
+    );
+    return;
+  }
+
+  if (data.type === "SKIP_WAITING") {
+    /* これは「更新する」ボタンを押した時だけページ側から送られる。
+       SW側が自発的に呼ぶことは絶対にしない。 */
+    self.skipWaiting();
+  }
 });
