@@ -142,14 +142,16 @@
   #diagBody .ok{color:#7CFFB2}
   #diagBody .ng{color:#FF8FA3; font-weight:700}
   #diagFoot{
-    display:flex; gap:10px; padding:14px 16px;
+    display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:14px 12px;
     border-top:1px solid rgba(255,255,255,.12);
   }
   #diagFoot button{
-    flex:1; border:none; border-radius:12px; padding:12px 8px;
-    font-size:13px; font-weight:800; cursor:pointer; color:#fff;
+    border:none; border-radius:12px; padding:12px 6px;
+    font-size:12px; font-weight:800; cursor:pointer; color:#fff;
   }
   #diagRefresh{background:#4D96FF}
+  #diagRetry{background:#9B59B6}
+  #diagCacheNow{background:#E67E22}
   #diagCheckUpdate{background:linear-gradient(135deg,var(--g1),var(--g2))}
 </style>
 </head>
@@ -181,6 +183,8 @@
   <div id="diagBody">読み込み中…</div>
   <div id="diagFoot">
     <button id="diagRefresh">🔄 再取得</button>
+    <button id="diagRetry">🩹 不足分を再試行</button>
+    <button id="diagCacheNow">📥 今すぐ手動で再取得</button>
     <button id="diagCheckUpdate">🌐 最新版を確認</button>
   </div>
 </div>
@@ -1378,6 +1382,8 @@ const diagOverlay    = document.getElementById("diagOverlay");
 const diagClose      = document.getElementById("diagClose");
 const diagBody       = document.getElementById("diagBody");
 const diagRefresh    = document.getElementById("diagRefresh");
+const diagRetry      = document.getElementById("diagRetry");
+const diagCacheNow   = document.getElementById("diagCacheNow");
 const diagCheckBtn   = document.getElementById("diagCheckUpdate");
 
 function escHtml(s){
@@ -1386,6 +1392,28 @@ function escHtml(s){
 }
 
 let lastDiagInfo = null;   // SWから来た最新のキャッシュ診断結果
+let lastInstallResult = null;   // install時の成否（バナーを見落としても確認できるよう保持）
+let storagePersisted = null;    // ストレージ永続化の許可有無（null=未確認）
+let cacheNowResponded = false;  // CACHE_NOW送信後、応答が来たかどうか（3秒監視用）
+
+/* ── ストレージ永続化のリクエスト ──
+   許可されると、ブラウザが「容量が少ない」等の理由で
+   Cache Storageを自動的に消してしまうのを防げる可能性が上がる。
+   許可されるかどうかはブラウザ・端末の判断に依存するため、
+   結果に関わらず診断パネルで確認できるようにしておく。       */
+async function requestStoragePersistence() {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      storagePersisted = await navigator.storage.persist();
+    } else {
+      storagePersisted = false;   // API非対応ブラウザ
+    }
+  } catch (err) {
+    storagePersisted = false;
+  }
+  renderDiag();
+}
+requestStoragePersistence();
 
 /* 画面に表示する診断テキストを組み立てる。
    SWの状態（active/waiting/installing）・controllerの有無・
@@ -1402,6 +1430,28 @@ async function renderDiag() {
   lines.push(`<span class="ttl">■ 基本情報</span>`);
   lines.push(`現在のURL: ${escHtml(location.href)}`);
   lines.push(`SW対応: <span class="ok">対応</span>`);
+  lines.push(
+    `ストレージ永続化: ${
+      storagePersisted === null
+        ? "確認中…"
+        : storagePersisted
+          ? '<span class="ok">許可されています（自動削除されにくい）</span>'
+          : '<span class="ng">許可されていません（ブラウザ判断で削除される可能性あり）</span>'
+    }`
+  );
+  if (lastInstallResult) {
+    const r = lastInstallResult;
+    lines.push(
+      r.failed.length === 0
+        ? `直近のキャッシュ取得: <span class="ok">✓ 全件成功 (${r.succeededCount}/${r.totalCount})</span>`
+        : `直近のキャッシュ取得: <span class="ng">✕ ${r.failed.length}件失敗 (${r.succeededCount}/${r.totalCount})</span>`
+    );
+    if (r.failed.length > 0) {
+      r.failed.forEach(f => {
+        lines.push(`  <span class="ng">・${escHtml(f.url)}: ${escHtml(f.message)}</span>`);
+      });
+    }
+  }
   lines.push("");
 
   lines.push(`<span class="ttl">■ 登録状態</span>`);
@@ -1434,6 +1484,21 @@ async function renderDiag() {
     lines.push("");
     lines.push(`<span class="ttl">■ 保存済みURL一覧</span>`);
     info.cachedUrls.forEach(u => lines.push(`  ${escHtml(u)}`));
+
+    /* 「🩹 不足分を再試行」を押した直後だけ、その場で取得した
+       具体的な失敗理由（HTTPエラー・ネットワークエラー等）を表示する。
+       これが無いと「失敗した」事実しか分からず、原因が追えない。 */
+    if (info.retryDetails) {
+      lines.push("");
+      lines.push(`<span class="ttl">■ 再試行の結果（今まさに取得した詳細）</span>`);
+      info.retryDetails.forEach(d => {
+        lines.push(
+          d.ok
+            ? `<span class="ok">✓ 成功: ${escHtml(d.url)}</span>`
+            : `<span class="ng">✕ 失敗: ${escHtml(d.url)}\n    理由: ${escHtml(d.message)}</span>`
+        );
+      });
+    }
   }
 
   diagBody.innerHTML = lines.join("\n");
@@ -1458,6 +1523,48 @@ diagRefresh.addEventListener("click", () => {
   diagBody.innerHTML = "問い合わせ中…";
   requestDiagFromSW();
   renderDiag();
+});
+
+/* 「🩹 不足分を再試行」：未キャッシュのファイルだけ今その場で
+   取り直し、各ファイルごとの成功/失敗と具体的な理由を表示する。
+   これまで原因不明だった「全件キャッシュ失敗」の正体を
+   ここで初めて画面上に明示できるようにする。               */
+diagRetry.addEventListener("click", () => {
+  if (!SW_SUPPORTED || !navigator.serviceWorker.controller) {
+    diagBody.innerHTML = `<span class="ng">controllerが無いため再試行できません。
+一度オンラインでページを再読み込みしてください。</span>`;
+    return;
+  }
+  diagBody.innerHTML = "不足分を再取得中…（最大3回リトライ）";
+  navigator.serviceWorker.controller.postMessage({ type: "RETRY_CACHE" });
+});
+
+/* 「📥 キャッシュを今すぐ手動で再取得する」：
+   install時とまったく同じロジックで、ASSETS全件を
+   その場で取得し直す（壊れている可能性のあるファイルも含めて作り直す）。
+   3秒以内にSWから応答が無い場合は、古いService Workerが
+   居座っている可能性をアラートで案内する。                  */
+diagCacheNow.addEventListener("click", () => {
+  if (!SW_SUPPORTED || !navigator.serviceWorker.controller) {
+    diagBody.innerHTML = `<span class="ng">controllerが無いため実行できません。
+一度オンラインでページを再読み込みしてください。</span>`;
+    return;
+  }
+
+  diagBody.innerHTML = "全ファイルを再取得中…（最大3回×ファイル数のリトライあり）";
+  cacheNowResponded = false;
+  navigator.serviceWorker.controller.postMessage({ type: "CACHE_NOW" });
+
+  setTimeout(() => {
+    if (!cacheNowResponded) {
+      alert(
+        "3秒以内にService Workerから応答がありません。\n" +
+        "古いバージョンのService Workerが残っている可能性があります。\n" +
+        "診断パネルの「controller」「active/waiting」の表示を確認し、" +
+        "必要であればサイトのストレージを削除して再インストールしてください。"
+      );
+    }
+  }, 3000);
 });
 
 /* 「🌐 最新版を確認」：ここが唯一、明示的にネットワーク更新チェックを
@@ -1488,6 +1595,7 @@ if (SW_SUPPORTED && location.protocol.startsWith("http")) {
     const data = e.data || {};
 
     if (data.type === "INSTALL_RESULT") {
+      lastInstallResult = data;   // バナーを見落としても診断パネルで確認できるよう保持
       if (data.failed.length === 0) {
         showInstallBanner(`✅ オフライン準備完了！ (${data.succeededCount}/${data.totalCount}件)`);
       } else {
@@ -1505,6 +1613,20 @@ if (SW_SUPPORTED && location.protocol.startsWith("http")) {
 
     if (data.type === "DIAGNOSTIC_RESULT") {
       lastDiagInfo = data;
+      renderDiag();
+    }
+
+    if (data.type === "CACHE_NOW_RESULT") {
+      cacheNowResponded = true;   // 3秒タイムアウト監視を解除するためのフラグ
+      lastInstallResult = data;   // 「直近のキャッシュ取得」欄で共通表示する
+      if (data.failed.length === 0) {
+        showInstallBanner(`✅ 全${data.totalCount}件を再取得しました`);
+      } else {
+        showInstallBanner(
+          `⚠️ 再取得で${data.failed.length}件失敗 (${data.succeededCount}/${data.totalCount}件)`,
+          { warn: true, autoHide: false }
+        );
+      }
       renderDiag();
     }
   });

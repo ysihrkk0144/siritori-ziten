@@ -10,7 +10,7 @@
      ERR_FAILED の原因になることが分かっているため。
    ・バージョンを上げる時は CACHE_NAME の数字を必ず増やすこと。
    ============================================================ */
-const CACHE_NAME = "kodomo-shiritori-v1";   // ← ファイル変更時に必ず上げる
+const CACHE_NAME = "kodomo-shiritori-v3";   // ← ファイル変更時に必ず上げる
 
 /* キャッシュ対象（service-worker.js 自身は含めない） */
 const ASSET_PATHS = [
@@ -27,13 +27,18 @@ const INDEX_URL = new URL("./index.html", self.location).href;
 
 /* ── リトライ付きフェッチ ──
    モバイル回線の不安定さに対応するため、最大3回まで試す。
-   {cache:"reload"} は使わない（一部Android環境で不安定になるため）。
-   代わりに {cache:"no-store"} でブラウザキャッシュを完全に回避する。 */
+   {cache:"reload"} 単体は一部Android環境で不安定になることが
+   分かっているため使わない。代わりに、試行ごとに
+   "no-store"（ブラウザキャッシュを完全無視）と
+   デフォルト（ブラウザ標準の判断に任せる）を交互に試し、
+   どちらか一方だけがうまくいくケースに両対応する。        */
 async function fetchWithRetry(url, maxRetries = 3) {
   let lastErr;
   for (let i = 0; i < maxRetries; i++) {
+    const useNoStore = (i % 2 === 0);   // 1,3回目はno-store／2回目はデフォルト
     try {
-      const res = await fetch(url, { cache: "no-store" });
+      const opts = useNoStore ? { cache: "no-store" } : {};
+      const res  = await fetch(url, opts);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res;
     } catch (err) {
@@ -46,28 +51,37 @@ async function fetchWithRetry(url, maxRetries = 3) {
   throw lastErr;
 }
 
+/* install時・CACHE_NOW時の両方から呼ばれる共通ロジック。
+   「キャッシュし直す」処理を一箇所にまとめておくことで、
+   2つの経路の動作が食い違わないようにする。               */
+async function cacheAllAssets() {
+  const cache = await caches.open(CACHE_NAME);
+
+  const results = await Promise.allSettled(
+    ASSETS.map(async absUrl => {
+      const res = await fetchWithRetry(absUrl, 3);
+      await cache.put(absUrl, res);
+    })
+  );
+
+  const succeeded = [];
+  const failed     = [];
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      succeeded.push(ASSETS[i]);
+    } else {
+      failed.push({ url: ASSETS[i], message: r.reason?.message ?? String(r.reason) });
+    }
+  });
+
+  return { succeeded, failed };
+}
+
 /* ── install：個別キャッシュ（1件失敗しても他は継続） ── */
 self.addEventListener("install", e => {
   e.waitUntil(
     (async () => {
-      const cache = await caches.open(CACHE_NAME);
-
-      const results = await Promise.allSettled(
-        ASSETS.map(async absUrl => {
-          const res = await fetchWithRetry(absUrl, 3);
-          await cache.put(absUrl, res);
-        })
-      );
-
-      const succeeded = [];
-      const failed     = [];
-      results.forEach((r, i) => {
-        if (r.status === "fulfilled") {
-          succeeded.push(ASSETS[i]);
-        } else {
-          failed.push({ url: ASSETS[i], message: r.reason?.message ?? String(r.reason) });
-        }
-      });
+      const { succeeded, failed } = await cacheAllAssets();
 
       /* 結果を画面（診断パネル・バナー）へ通知する。
          DevToolsが使えない環境のため、console.logだけでは不十分。 */
@@ -184,20 +198,73 @@ self.addEventListener("fetch", e => {
 self.addEventListener("message", e => {
   const data = e.data || {};
 
-  if (data.type === "GET_DIAGNOSTIC") {
+  if (data.type === "GET_DIAGNOSTIC" || data.type === "RETRY_CACHE") {
     e.waitUntil(
       (async () => {
-        const cache      = await caches.open(CACHE_NAME);
-        const reqs       = await cache.keys();
-        const cachedUrls = reqs.map(r => r.url);
-        const missing    = ASSETS.filter(a => !cachedUrls.includes(a));
+        const cache = await caches.open(CACHE_NAME);
+
+        let reqs       = await cache.keys();
+        let cachedUrls = reqs.map(r => r.url);
+        let missing    = ASSETS.filter(a => !cachedUrls.includes(a));
+
+        let retryDetails = null;
+
+        /* RETRY_CACHE の時だけ、不足しているファイルを今その場で
+           取り直し、成功/失敗の具体的な理由まで返す。
+           これまで「失敗した」事実しか分からなかった問題に対し、
+           "なぜ失敗したか" を画面上で直接確認できるようにする。 */
+        if (data.type === "RETRY_CACHE" && missing.length > 0) {
+          const results = await Promise.allSettled(
+            missing.map(async absUrl => {
+              const res = await fetchWithRetry(absUrl, 3);
+              await cache.put(absUrl, res);
+            })
+          );
+          retryDetails = results.map((r, i) => ({
+            url: missing[i],
+            ok: r.status === "fulfilled",
+            message: r.status === "rejected"
+              ? (r.reason?.message ?? String(r.reason))
+              : null
+          }));
+
+          /* 取り直した結果で再集計する */
+          reqs       = await cache.keys();
+          cachedUrls = reqs.map(r => r.url);
+          missing    = ASSETS.filter(a => !cachedUrls.includes(a));
+        }
+
         const info = {
           type: "DIAGNOSTIC_RESULT",
           cacheName: CACHE_NAME,
           cachedCount: cachedUrls.length,
           expectedCount: ASSETS.length,
           cachedUrls,
-          missing
+          missing,
+          retryDetails
+        };
+        if (e.source) e.source.postMessage(info);
+      })()
+    );
+    return;
+  }
+
+  if (data.type === "CACHE_NOW") {
+    /* 「📥 キャッシュを今すぐ手動で再取得する」ボタンから送られる。
+       install時とまったく同じロジック（cacheAllAssets）で
+       ASSETS全件を取得し直す。不足分だけでなく全件を対象にするのは、
+       「壊れている可能性のあるファイルを含めて、まっさらに作り直す」
+       ための機能だから。                                       */
+    e.waitUntil(
+      (async () => {
+        const { succeeded, failed } = await cacheAllAssets();
+        const info = {
+          type: "CACHE_NOW_RESULT",
+          cacheName: CACHE_NAME,
+          succeededCount: succeeded.length,
+          totalCount: ASSETS.length,
+          succeeded,
+          failed
         };
         if (e.source) e.source.postMessage(info);
       })()
